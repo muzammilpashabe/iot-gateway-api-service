@@ -50,6 +50,33 @@ app.get('/api/channels/:id', async (req, res) => {
   res.json(r.rows[0] || null);
 });
 
+app.put('/api/channels/:id', async (req, res) => {
+  const { name, description, allowedFields, minWrite, minRead, maxFields } = req.body || {};
+  const updates = [];
+  const values = [];
+  let idx = 1;
+  
+  if (name !== undefined) { updates.push(`name=$${idx++}`); values.push(name); }
+  if (description !== undefined) { updates.push(`description=$${idx++}`); values.push(description); }
+  if (allowedFields !== undefined) { updates.push(`allowed_fields=$${idx++}`); values.push(allowedFields); }
+  if (minWrite !== undefined) { updates.push(`min_write_interval_seconds=$${idx++}`); values.push(minWrite); }
+  if (minRead !== undefined) { updates.push(`min_read_interval_seconds=$${idx++}`); values.push(minRead); }
+  if (maxFields !== undefined) { updates.push(`max_fields=$${idx++}`); values.push(maxFields); }
+  
+  if (!updates.length) return res.status(400).json({ error: 'no fields to update' });
+  
+  values.push(req.params.id);
+  const r = await pool.query(`update channels set ${updates.join(',')} where id=$${idx} returning *`, values);
+  if (!r.rows[0]) return res.status(404).json({ error: 'channel not found' });
+  res.json(r.rows[0]);
+});
+
+app.delete('/api/channels/:id', async (req, res) => {
+  const r = await pool.query('delete from channels where id=$1 returning id', [req.params.id]);
+  if (!r.rows[0]) return res.status(404).json({ error: 'channel not found' });
+  res.json({ ok: true, id: r.rows[0].id });
+});
+
 app.post('/api/channels/:id/keys', async (req, res) => {
   const { scope = 'readwrite' } = req.body || {};
   const key = crypto.randomBytes(24).toString('hex');
@@ -185,8 +212,45 @@ app.get('/api/workflows', async (req, res) => {
   const apiKey = (req.header('x-api-key') || '').trim();
   const channelId = await checkApiKey(apiKey, 'read');
   if (!channelId) return res.status(401).json({ error: 'invalid key' });
-  const r = await pool.query('select * from workflows where channel_id=$1', [channelId]);
+  const r = await pool.query('select * from workflows where channel_id=$1 order by created_at desc', [channelId]);
   res.json(r.rows);
+});
+
+app.put('/api/workflows/:id', async (req, res) => {
+  const apiKey = (req.header('x-api-key') || '').trim();
+  const channelId = await checkApiKey(apiKey, 'write');
+  if (!channelId) return res.status(401).json({ error: 'invalid key' });
+  
+  const { name, enabled, rule, action } = req.body || {};
+  const updates = [];
+  const values = [];
+  let idx = 1;
+  
+  if (name !== undefined) { updates.push(`name=$${idx++}`); values.push(name); }
+  if (enabled !== undefined) { updates.push(`enabled=$${idx++}`); values.push(enabled); }
+  if (rule !== undefined) { updates.push(`rule=$${idx++}`); values.push(rule); }
+  if (action !== undefined) { updates.push(`action=$${idx++}`); values.push(action); }
+  
+  if (!updates.length) return res.status(400).json({ error: 'no fields to update' });
+  
+  values.push(req.params.id);
+  values.push(channelId);
+  const r = await pool.query(
+    `update workflows set ${updates.join(',')} where id=$${idx} and channel_id=$${idx+1} returning *`,
+    values
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: 'workflow not found' });
+  res.json(r.rows[0]);
+});
+
+app.delete('/api/workflows/:id', async (req, res) => {
+  const apiKey = (req.header('x-api-key') || '').trim();
+  const channelId = await checkApiKey(apiKey, 'write');
+  if (!channelId) return res.status(401).json({ error: 'invalid key' });
+  
+  const r = await pool.query('delete from workflows where id=$1 and channel_id=$2 returning id', [req.params.id, channelId]);
+  if (!r.rows[0]) return res.status(404).json({ error: 'workflow not found' });
+  res.json({ ok: true, id: r.rows[0].id });
 });
 
 async function evaluateWorkflows(channelId, fields) {
@@ -205,5 +269,3 @@ async function evaluateWorkflows(channelId, fields) {
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`API listening on :${port}`));
-
-
